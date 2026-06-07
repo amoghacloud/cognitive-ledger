@@ -28,3 +28,7 @@ validator_private_*.pem
 # Developer logs and checklists
 PRODUCTION_READINESS.md
 
+# Rust build artifacts
+target/
+Cargo.lock
+

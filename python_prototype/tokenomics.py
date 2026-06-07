@@ -14,6 +14,7 @@ class TokenomicsManager:
         self.balances = {}
         self.data_equity = {}
         self.model_datasets = {}
+        self.validators = {}
 
         if genesis_balances:
             for address, balances in genesis_balances.items():
@@ -132,3 +133,36 @@ class TokenomicsManager:
 
     def _is_non_negative_amount(self, amount: float) -> bool:
         return isinstance(amount, (int, float)) and math.isfinite(amount) and amount >= 0
+
+    def stake_validator(self, address: str, amount: float) -> bool:
+        if not self._is_positive_amount(amount):
+            return False
+        self.ensure_balance_record(address)
+        if self.balances[address]["FLOP"] < amount:
+            return False
+        self.balances[address]["FLOP"] -= amount
+        self.validators[address] = self.validators.get(address, 0.0) + amount
+        return True
+
+    def unstake_validator(self, address: str, amount: float) -> bool:
+        if not self._is_positive_amount(amount):
+            return False
+        staked = self.validators.get(address, 0.0)
+        if staked < amount:
+            return False
+        self.validators[address] -= amount
+        if self.validators[address] <= 0.0:
+            del self.validators[address]
+        self.ensure_balance_record(address)
+        self.balances[address]["FLOP"] += amount
+        return True
+
+    def slash_validator(self, address: str, percentage: float) -> float:
+        staked = self.validators.get(address, 0.0)
+        if staked <= 0.0:
+            return 0.0
+        slashed_amount = staked * percentage
+        self.validators[address] -= slashed_amount
+        if self.validators[address] <= 0.0:
+            del self.validators[address]
+        return slashed_amount

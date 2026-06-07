@@ -387,6 +387,24 @@ def handle_tx(args):
             console.print("[red]--amount must be greater than 0.[/red]")
             return
 
+    elif tx_type == "STAKE_VALIDATOR":
+        if not args.amount or args.amount <= 0:
+            console.print("[red]--amount must be specified and greater than 0 for STAKE_VALIDATOR[/red]")
+            return
+        tx_args.update({
+            "amount": args.amount,
+            "token_type": "FLOP"
+        })
+
+    elif tx_type == "UNSTAKE_VALIDATOR":
+        if not args.amount or args.amount <= 0:
+            console.print("[red]--amount must be specified and greater than 0 for UNSTAKE_VALIDATOR[/red]")
+            return
+        tx_args.update({
+            "amount": args.amount,
+            "token_type": "FLOP"
+        })
+
     tx = Transaction(**tx_args)
     
     # 3. Cryptographically Sign transaction
@@ -432,7 +450,7 @@ def main():
     tx_parser = subparsers.add_parser("tx", help="Builds, signs, and submits transactions to the ledger network")
     tx_parser.add_argument("--port", type=int, default=5000, help="Port of node to submit transaction")
     tx_parser.add_argument("--key-file", type=str, default="wallet_private.pem", help="Path to sender's private key file")
-    tx_parser.add_argument("--type", type=str, required=True, choices=["transfer", "register_model", "infer_contract", "stake_data"], help="Type of transaction")
+    tx_parser.add_argument("--type", type=str, required=True, choices=["transfer", "register_model", "infer_contract", "stake_data", "stake_validator", "unstake_validator"], help="Type of transaction")
     tx_parser.add_argument("--receiver", type=str, help="Recipient address for TRANSFER transactions")
     tx_parser.add_argument("--amount", type=float, help="Value/Amount for TRANSFER or STAKE_DATA transactions")
     tx_parser.add_argument("--token", type=str, default="FLOP", choices=["FLOP", "DATA", "ATTN"], help="Token asset type")

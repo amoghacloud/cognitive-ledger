@@ -71,6 +71,8 @@ class Blockchain:
         self.chain: List[Block] = []
         self.pending_transactions: List[Transaction] = []
         self.tokenomics = TokenomicsManager(self.config, genesis_balances)
+        if self.config.founder_address:
+            self.tokenomics.validators[self.config.founder_address] = self.config.min_validator_stake
         self.registered_models: Dict[str, Dict[str, Any]] = {}
         self.account_nonces: Dict[str, int] = {}
         self.difficulty = self.config.difficulty
@@ -100,6 +102,28 @@ class Blockchain:
         )
         genesis_block.hash = genesis_block.calculate_hash()
         self.chain.append(genesis_block)
+
+    def select_leader(self, block_index: int, prev_hash: str, state_tokenomics: TokenomicsManager) -> str:
+        """Selects a validator weighted by their staked FLOP tokens."""
+        validators = state_tokenomics.validators
+        if not validators:
+            return self.config.founder_address or "GENESIS"
+        
+        sorted_validators = sorted(validators.keys())
+        total_stake = sum(validators[v] for v in sorted_validators)
+        if total_stake <= 0.0:
+            return self.config.founder_address or "GENESIS"
+            
+        seed_hash = hash_data(f"{prev_hash}-{block_index}")
+        seed_int = int(seed_hash[:16], 16)
+        
+        target = (seed_int % int(total_stake * 100)) / 100.0
+        current = 0.0
+        for val in sorted_validators:
+            current += validators[val]
+            if current >= target:
+                return val
+        return sorted_validators[-1]
 
     def set_commit_callback(self, on_commit: Optional[Callable[["Blockchain"], None]]):
         self.on_commit = on_commit
@@ -174,6 +198,13 @@ class Blockchain:
         elif tx.tx_type == "STAKE_DATA":
             if self.tokenomics.get_balance(tx.sender, "DATA") < tx.amount:
                 return False
+        elif tx.tx_type == "STAKE_VALIDATOR":
+            if self.tokenomics.get_balance(tx.sender, "FLOP") < tx.amount:
+                return False
+        elif tx.tx_type == "UNSTAKE_VALIDATOR":
+            staked = self.tokenomics.validators.get(tx.sender, 0.0)
+            if staked < tx.amount:
+                return False
 
         # 4. Check for duplicate pending txs
         for p_tx in self.pending_transactions:
@@ -219,7 +250,10 @@ class Blockchain:
 
         if tx.tx_type == "STAKE_DATA":
             return bool(tx.dataset_id) and self._is_positive_number(tx.amount)
-
+        if tx.tx_type == "STAKE_VALIDATOR":
+            return tx.token_type == "FLOP" and tx.amount >= self.config.min_validator_stake
+        if tx.tx_type == "UNSTAKE_VALIDATOR":
+            return tx.token_type == "FLOP" and self._is_positive_number(tx.amount)
         return False
 
     def execute_transaction_on_state(
@@ -325,6 +359,14 @@ class Blockchain:
             success = state_tokenomics.stake_data_equity(tx.sender, tx.dataset_id, tx.amount)
             if not success:
                 raise ValueError("Insufficient DATA balance for staking")
+        elif tx.tx_type == "STAKE_VALIDATOR":
+            success = state_tokenomics.stake_validator(tx.sender, tx.amount)
+            if not success:
+                raise ValueError("Insufficient FLOP balance for validator staking")
+        elif tx.tx_type == "UNSTAKE_VALIDATOR":
+            success = state_tokenomics.unstake_validator(tx.sender, tx.amount)
+            if not success:
+                raise ValueError("Insufficient staked balance for validator unstaking")
 
         # Update nonce
         state_nonces[tx.sender] = tx.nonce
@@ -333,7 +375,7 @@ class Blockchain:
     def mine_block(self, validator_address: str) -> Optional[Block]:
         """
         Assembles pending transactions, runs VCG auction priority sorting,
-        executes the neural VMs, updates local state ledger, and mines a new block.
+        executes the neural VMs, updates local state ledger, and proposes a new PoS block.
         """
         if not self.pending_transactions:
             return None
@@ -394,6 +436,11 @@ class Blockchain:
         # Create Block structure
         prev_block = self.chain[-1]
         
+        # Verify slot leader
+        expected_leader = self.select_leader(prev_block.index + 1, prev_block.hash, self.tokenomics)
+        if validator_address != expected_leader:
+            raise ValueError(f"Not slot leader. Leader: {expected_leader[:16]}...")
+        
         # Update self stats to compute temporary state root
         self.tokenomics = temp_tokenomics
         self.registered_models = temp_models
@@ -411,14 +458,7 @@ class Blockchain:
             nonce=0
         )
 
-        # 2. Mine block: Proof-of-Work difficulty loop
-        prefix = "0" * self.difficulty
-        while True:
-            h = new_block.calculate_hash()
-            if h.startswith(prefix):
-                new_block.hash = h
-                break
-            new_block.nonce += 1
+        new_block.hash = new_block.calculate_hash()
 
         # Remove executed transactions from pending memory pool
         for tx in executed_txs:
@@ -432,8 +472,8 @@ class Blockchain:
 
     def validate_block(self, block: Block, persist: bool = True) -> bool:
         """
-        Validates block fields, signatures, structural hashing,
-        Proof-of-Inference neural logic execution, and state outcomes.
+        Validates block fields, signatures, slot leader checks,
+        Proof-of-Inference neural logic execution, and triggers slashing if invalid.
         """
         # 1. Structure Check
         if not self.chain:
@@ -446,7 +486,10 @@ class Blockchain:
             return False
         if block.hash != block.calculate_hash():
             return False
-        if not block.hash.startswith("0" * self.difficulty):
+            
+        # Verify slot leader
+        expected_leader = self.select_leader(block.index, prev_block.hash, self.tokenomics)
+        if block.validator != expected_leader:
             return False
 
         # 2. Validate transactions and recreate state updates
@@ -456,15 +499,22 @@ class Blockchain:
 
         for tx in block.transactions:
             if not self.validate_transaction_shape(tx):
+                # Slash validator for proposing invalid transaction
+                self.tokenomics.slash_validator(block.validator, self.config.validator_slashing_rate)
+                self._commit()
                 return False
             # Verify signature
             if tx.sender != "GENESIS":
                 if not tx.signature or not verify_signature(tx.sender, tx.signature, tx.to_signable_str()):
+                    self.tokenomics.slash_validator(block.validator, self.config.validator_slashing_rate)
+                    self._commit()
                     return False
 
             # Verify nonce
             curr_nonce = temp_nonces.get(tx.sender, 0)
             if tx.nonce <= curr_nonce:
+                self.tokenomics.slash_validator(block.validator, self.config.validator_slashing_rate)
+                self._commit()
                 return False
 
             # Execute transaction on temp state
@@ -476,16 +526,26 @@ class Blockchain:
                 if tx.tx_type == "INFER_CONTRACT":
                     recorded_res = block.proof_of_inference.get(tx.signature)
                     if not recorded_res:
+                        self.tokenomics.slash_validator(block.validator, self.config.validator_slashing_rate)
+                        self._commit()
                         return False
                     # Compare logits, confidence, and bounds (within tolerances or exactly)
                     if recorded_res.get("logits") != res["logits"]:
+                        self.tokenomics.slash_validator(block.validator, self.config.validator_slashing_rate)
+                        self._commit()
                         return False
                     if recorded_res.get("confidence") != res["confidence"]:
+                        self.tokenomics.slash_validator(block.validator, self.config.validator_slashing_rate)
+                        self._commit()
                         return False
                     if recorded_res.get("uncertainty_bounds") != res["uncertainty_bounds"]:
+                        self.tokenomics.slash_validator(block.validator, self.config.validator_slashing_rate)
+                        self._commit()
                         return False
             except Exception as e:
                 print(f"[Block Validator] Transaction validation failure: {e}")
+                self.tokenomics.slash_validator(block.validator, self.config.validator_slashing_rate)
+                self._commit()
                 return False
 
         # 3. Check State Root Hash
@@ -498,6 +558,8 @@ class Blockchain:
         }
         computed_state_root = hash_data(json.dumps(state_repr, sort_keys=True))
         if computed_state_root != block.state_root:
+            self.tokenomics.slash_validator(block.validator, self.config.validator_slashing_rate)
+            self._commit()
             return False
 
         # Apply state changes permanently
