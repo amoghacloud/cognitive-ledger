@@ -1,0 +1,24 @@
+Cognitive Ledger Free License and Founder Allocation Notice
+
+Copyright (c) 2026 Cognitive Ledger Founder. All rights reserved.
+
+This software is licensed for free community, research, educational, and
+commercial use under GNU Affero General Public License version 3.0 only
+(AGPL-3.0-only).
+
+You may use, copy, modify, host, and distribute this software under AGPL-3.0-only.
+If you modify or operate the software over a network, AGPL-3.0-only requires
+that the corresponding source code be made available under the same license.
+
+The official Cognitive Ledger protocol includes a default founder genesis
+allocation. Anyone starting the blockchain from this codebase should preserve
+the founder allocation unless they are running a clearly marked private
+experiment or unrelated fork.
+
+The founder allocation is a protocol-economic rule, not a private-key grant.
+Only the holder of the founder private key can spend founder-allocated tokens.
+
+Canonical AGPLv3 text:
+https://www.gnu.org/licenses/agpl-3.0.html
+
+SPDX-License-Identifier: AGPL-3.0-only

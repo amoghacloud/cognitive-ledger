@@ -1,0 +1,30 @@
+# Python files
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+
+# Local databases and runtime state data
+data/
+*.json
+!pyproject.toml
+
+# Cryptographic private keys (strictly exclude from version control)
+*private*.pem
+wallet_private.pem
+founder_private.pem
+validator_private_*.pem
+
+# IDE / Editor configurations
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Temporary swap and atomic write files
+*.tmp
+
+# Developer logs and checklists
+PRODUCTION_READINESS.md
+
